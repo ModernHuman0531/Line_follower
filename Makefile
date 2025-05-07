@@ -14,14 +14,18 @@ build:
 # 啟動容器
 
 run:
+		xhost +local:root
 		docker run -it --rm \
 			--name $(DOCKER_CONTAINER) \
 			--privileged \
 			--ulimit nofile=1024:524288 \
+			-v /tmp/.X11-unix:/tmp/.X11-unix:rw \
 			-v /home/dunkun/Documents/control_lab/HW06/ros_docker_project/catkin_ws:/catkin_ws \
 			-v $(PWD)/arduino:/arduino \
-			-e DISPLAY=$DISPLAY \
+			-e DISPLAY=$(DISPLAY) \
+			--device /dev/dri \
 			$(DOCKER_IMAGE)
+
 
 # 清理已建立的容器和映像檔
 clean:
@@ -35,4 +39,4 @@ install_gazebo:
 		$(DOCKER_IMAGE) bash -c "apt-get install -y gazebo11 libgazebo11-dev"
 
 attach:
-		@sudo docker exec -it $(DOCKER_CONTAINER) /bin/zsh
+		@sudo docker exec -it $(DOCKER_CONTAINER) /bin/zsh -c "source /catkin_ws/devel/setup.zsh && /bin/zsh"

@@ -1,0 +1,7 @@
+<launch>
+    <node name="lane_follower_node" pkg="lane_follower" type="lane_detector_node.py" output="screen">
+        <param name="visualization" value="true" />
+        <param name="use_video" value="true" />
+        <param name="video_path" value="/catkin_ws/src/lane_follower/assest/Line_follower.mp4" />
+    </node>
+</launch>

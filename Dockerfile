@@ -1,8 +1,10 @@
 # 使用 ROS Noetic 官方映像
 FROM ros:noetic
 
+
 # 環境設定
 ENV DEBIAN_FRONTEND=noninteractive
+
 
 # 安裝所需的套件
 RUN apt-get update && apt-get install -y \
@@ -63,6 +65,8 @@ RUN apt-get update && apt-get install -y \
   ros-noetic-camera-info-manager \
   ros-noetic-sensor-msgs \
   ros-noetic-vision-opencv \
+  libxcb-xinerama0 \
+  qt5-qmake qtbase5-dev-tools qtbase5-dev \
   && rm -rf /var/lib/apt/lists/*
 
 # Install arduino-cli
@@ -83,6 +87,8 @@ RUN apt-get install -y libx11-dev libglu1-mesa
 
 # 確保使用者環境變數
 ENV DISPLAY=${DISPLAY}
+
+
 
 # 設置容器啟動時進入 Zsh
 CMD ["/usr/bin/zsh"]
