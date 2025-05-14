@@ -24,7 +24,8 @@ class LaneDetectorNode:
         self.offset_pub = rospy.Publisher('lane_offset', Float32, queue_size=10)
 
         # Parameters for the process image
-        self.height_ratio = 0.5
+        self.height_ratio = 0.55
+        self.width_offset = 0
         self.canny_low_threshold = 90
         self.canny_high_threshold = 160
         self.hough_threshold = 30#20
@@ -132,11 +133,10 @@ class LaneDetectorNode:
         adaptive_binary = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2) 
         #cv2.imshow('binary', adaptive_binary)  
         # Define the ROI region
-        roi_region = np.array([[(0, height), (0,  height*self.height_ratio), (width, height*self.height_ratio), (width, height)]], dtype=np.int32)
+        roi_region = np.array([[(0, height), (0+self.width_offset,  height*self.height_ratio), (width-self.width_offset, height*self.height_ratio), (width, height)]], dtype=np.int32)
         roi_mask = np.zeros_like(adaptive_binary)
         # White the ROI region and put it into the mask, only ROI region is white
         cv2.fillPoly(roi_mask, roi_region, 255)
-
 
         #Apply morphological operations, to create kernals for dilation and erosion
         kernal = np.ones((3,3), np.uint8)
@@ -180,23 +180,33 @@ class LaneDetectorNode:
             return None, None
         height, width = frame.shape[:2]
         left_lines, right_lines = [], []
-
-        if len(lines) <= 2:# Means only detect one lane
+            
+        # Only detect one lane
+        if len(lines) <= 2:
             for line in lines:
                 x1, y1, x2, y2 = line[0]
-                if x1 > 0.2 * width and x2 > 0.2 * width:
-                    if y1 > 0.4 * height and y2 > 0.4 * height:
+                slope = (y2 - y1) / (x2 - x1) if (x2 - x1) != 0 else 0
+                if slope > 0.15:
+                    if x1 < 0.6*width and x1 < x2:                    
                         left_lines.append(line)
-                    right_lines.append(line)
-                elif x1 < 0.8 * width and x2 < 0.8 * width:
+                elif slope < -0.15:       
+                    if x1 > 0.4*width and x1 > x2:
+                        right_lines.append(line)
+                else:
                     left_lines.append(line)
-        else:# Detect two lanes
+        else:
             for line in lines:
                 x1, y1, x2, y2 = line[0]
-                if x1 < 0.5 * width and x2 < 0.5 * width:
+                slope = (y2 - y1) / (x2 - x1) if (x2 - x1) != 0 else 0
+                if slope > 0.15:
+                    if x1 < 0.5 * width and x2 < 0.5 * width:
+                        left_lines.append(line)
+                elif slope < -0.15:
+                    if x1 > 0.5 * width and x2 > 0.5 * width:
+                        right_lines.append(line)
+                else:
                     left_lines.append(line)
-                elif x1 > 0.5 * width and x2 > 0.5 * width:
-                    right_lines.append(line)
+    
         return left_lines, right_lines
 
     def classify_center(self, frame, left_lines, right_lines):
