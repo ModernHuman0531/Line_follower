@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y \
   libxrender1 \
   libxt6 \
   libx11-dev \
-  v4l-utils \ 
+  v4l-utils \
   && rm -rf /var/lib/apt/lists/*
 
 # 安裝 oh-my-zsh, powerlevel10k, zsh-autosuggestions, zsh-syntax-highlighting
@@ -59,6 +59,7 @@ RUN pip install --no-cache-dir matplotlib
 RUN pip install --no-cache-dir opencv-python
 
 # Install ROS OpenCV(cv bridge) to use OpenCV in ROS
+# Install rosserial and rosserial-arduino to enable communication between ROS and Arduino
 RUN apt-get update && apt-get install -y \
   ros-noetic-cv-bridge \
   ros-noetic-image-transport \
@@ -66,6 +67,8 @@ RUN apt-get update && apt-get install -y \
   ros-noetic-sensor-msgs \
   ros-noetic-vision-opencv \
   libxcb-xinerama0 \
+  ros-noetic-rosserial \
+  ros-noetic-rosserial-arduino \
   qt5-qmake qtbase5-dev-tools qtbase5-dev \
   && rm -rf /var/lib/apt/lists/*
 

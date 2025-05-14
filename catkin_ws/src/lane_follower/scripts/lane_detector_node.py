@@ -23,6 +23,15 @@ class LaneDetectorNode:
         # Create a publisher to publish offset
         self.offset_pub = rospy.Publisher('lane_offset', Float32, queue_size=10)
 
+        # Parameters for the process image
+        self.height_ratio = 0.5
+        self.canny_low_threshold = 90
+        self.canny_high_threshold = 160
+        self.hough_threshold = 30#20
+        self.hough_min_line_length = 20#5
+        self.hough_max_line_gap = 30#60
+
+
         # Video mode
         if self.use_video:
             self.cap = cv2.VideoCapture(self.video_path)
@@ -102,42 +111,62 @@ class LaneDetectorNode:
 
     def process_image(self, frame):
         """ Preprocess the image for lane detection 
-        1. Convert to grayscale
-        2.  
+        1. Convert to grayscale 
+        2. Define the ROI region first and then apply the mask
+        3. Apply the Gaussian blur to reduce noise
+        4. Apply the binary threshold to isolate the lane lines
+        5. Apply the ROI mask to the image to reduce the noise and help canny edge detection
+        6.Applu erosion and dilation to remove noise
+        7. Apply the Canny edge detection to detect the edges
+        8. Apply the Hough transform to detect the lines
+        9. Return the lines
         """
+        # Define the ROI region first and then apply the mask
+
         height, width = frame.shape[:2]
         # Convert to grayscale(0-255)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) 
         # Apply Gaussian blur to reduce noise and improve edge detection
-        blur = cv2.GaussianBlur(gray, (5,5), 0)
-        # Apply binary thershold to isolate the lane lines
-        _, binary = cv2.threshold(blur, 160, 255, cv2.THRESH_BINARY)
+        blur = cv2.GaussianBlur(gray, (5,5), 0)    
+        # Apply adaptive_binary threshold to isolate the lane lines, very helpful
+        adaptive_binary = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2) 
+        #cv2.imshow('binary', adaptive_binary)  
+        # Define the ROI region
+        roi_region = np.array([[(0, height), (0,  height*self.height_ratio), (width, height*self.height_ratio), (width, height)]], dtype=np.int32)
+        roi_mask = np.zeros_like(adaptive_binary)
+        # White the ROI region and put it into the mask, only ROI region is white
+        cv2.fillPoly(roi_mask, roi_region, 255)
+
 
         #Apply morphological operations, to create kernals for dilation and erosion
         kernal = np.ones((3,3), np.uint8)
         # Erosion to remove noise
-        eroded = cv2.erode(binary, kernal, iterations=1)
+        eroded = cv2.erode(adaptive_binary, kernal, iterations=1)
         # Dilation to fill gaps in the lane lines
         dilated = cv2.dilate(eroded, kernal, iterations=2)
-        #Apply Canny edge detection
-        edges = cv2.Canny(dilated, 50, 150)
+        #cv2.imshow('dilated', dilated)
+
+        # Use and to access the origin image's ROI region and the other region is black
+        dilated_roi = cv2.bitwise_and(dilated, roi_mask)
+        # Show the ROI region
+        cv2.imshow('dilated_roi', dilated_roi)
+
+        #Apply Canny edge detection after applying mask to let canny focus on the lane lines
+        edges = cv2.Canny(dilated_roi, self.canny_low_threshold, self.canny_high_threshold)
         cv2.imshow('edges', edges)
 
-        # Set ROI to focus on the lane lines
-        roi_region = np.array([[(0, height), (0,  height*0.55), (width, height*0.55), (width, height)]], dtype=np.int32)
-        mask = np.zeros_like(edges)
-        cv2.fillPoly(mask, roi_region, 255)
-        # Apply bitwise AND to get only the edges in our ROI
-        masked_edges = cv2.bitwise_and(edges, mask)
-        cv2.imshow('masked_edges', masked_edges)
+        # Apply ROI mask again on the edges to avoid noise
+        masked_edges = cv2.bitwise_and(edges, roi_mask)
+        #cv2.imshow('masked_edges', masked_edges)
+
         # Use hough transform to detect lines
         lines = cv2.HoughLinesP(
             masked_edges,
             rho=1,
             theta=np.pi/180,
-            threshold=20,
-            minLineLength=5,
-            maxLineGap=60
+            threshold=self.hough_threshold,
+            minLineLength=self.hough_min_line_length,
+            maxLineGap=self.hough_max_line_gap
         )
 
         return lines
@@ -246,13 +275,13 @@ class LaneDetectorNode:
         # Show the offset between the lane center and the video center
         offset = lane_center - center_x
         if offset > 0:
-            cv2.putText(line_image, f'offset left: {offset:.2f}', (int(lane_center), 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            cv2.putText(line_image, f'offset left: {offset:.2f}', (width-20, height-20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         elif offset < 0:
-            cv2.putText(line_image, f'offset right: {offset:.2f}', (int(lane_center), 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+            cv2.putText(line_image, f'offset right: {offset:.2f}', (width-20, height-20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
         else:
-            cv2.putText(line_image, 'offset: 0', (int(lane_center), 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            cv2.putText(line_image, 'offset: 0', (width-20, height-20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
         # Show the line
-        cv2.imshow('line_image', line_image)
+        #cv2.imshow('line_image', line_image)
         return cv2.addWeighted(frame, 0.8, line_image, 1, 0)
 if __name__ == '__main__':
     # Initialize the ROS node
