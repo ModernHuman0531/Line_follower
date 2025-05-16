@@ -11,8 +11,12 @@ all: build run
 build:
 		docker build -t $(DOCKER_IMAGE) -f $(DOCKERFILE) .
 
-# 啟動容器
+# Activate the container
 
+# If in rasberry pi 4, we need to load usb of web camera and arduino mega
+
+## Add --device=/dev/ttyUSB0:/dev/ttyUSB0 to let docker access the arduino
+## Add --device=/dev/video0:/dev/video0 to let docker access the web camera 
 run:
 		xhost +local:root
 		docker run -it --rm \

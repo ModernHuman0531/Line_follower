@@ -1,12 +1,17 @@
-# 使用 ROS Noetic 官方映像
+# Use ROS Noetic official image for desktop environment
 FROM ros:noetic
 
+# If use in raspberry pi 4, use this line
+# FROM arm64v8/ros:noetic
 
-# 環境設定
+
+# Environment settings
 ENV DEBIAN_FRONTEND=noninteractive
 
 
-# 安裝所需的套件
+# Install dependencies
+# Since rasberry pi can't run gazebo, we don't need to install gazebo
+# Remove /gazebo11 and libgazebo11-dev
 RUN apt-get update && apt-get install -y \
   zsh \
   curl \
@@ -41,22 +46,16 @@ RUN echo "plugins=(git zsh-autosuggestions zsh-syntax-highlighting)" >> ~/.zshrc
 # 安裝 nvim
 RUN apt-get update && apt-get install -y neovim
 
-# 設定 Gazebo
-RUN apt-get update && apt-get install -y \
-  libglu1-mesa \
-  libxi6 \
-  libxmu6 \
-  libxrender1 \
-  libxt6
-
 # Install python package for the for line detection
 # 安裝 numpy 和 matplotlib，確保版本相容
 # 強制升級 numpy 到 1.20 以上版本，然後再安裝 matplotlib
 RUN pip install --no-cache-dir numpy>=1.20
 RUN pip install --no-cache-dir matplotlib
 
-# 安裝 OpenCV
+# 安裝 OpenCV in local computer
 RUN pip install --no-cache-dir opencv-python
+# If install opencv in raspberry pi 4, use this line
+# Run apt-get update && apt-get install -y python3-opencv
 
 # Install ROS OpenCV(cv bridge) to use OpenCV in ROS
 # Install rosserial and rosserial-arduino to enable communication between ROS and Arduino
@@ -73,10 +72,13 @@ RUN apt-get update && apt-get install -y \
   && rm -rf /var/lib/apt/lists/*
 
 # Install arduino-cli
+# Don't need this line if in raspberry pi 4, since already install arduino IDE
+
 RUN curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
 ENV PATH="/root/bin:${PATH}"
 
 # Initialize arduino-cli and update the index and install the core
+# Don't need this line if in raspberry pi 4, since already install arduino IDE
 RUN arduino-cli config init && \
   arduino-cli core update-index && \
   arduino-cli core install arduino:avr
@@ -86,12 +88,8 @@ RUN arduino-cli config init && \
 COPY ./zsh-config/.zshrc /root/.zshrc
 
 # 確保 Gazebo 可以顯示 GUI
+# Don't need this line if in raspberry pi 4
 RUN apt-get install -y libx11-dev libglu1-mesa
-
-# 確保使用者環境變數
-ENV DISPLAY=${DISPLAY}
-
-
 
 # 設置容器啟動時進入 Zsh
 CMD ["/usr/bin/zsh"]
