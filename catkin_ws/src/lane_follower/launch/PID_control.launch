@@ -1,4 +1,15 @@
 <launch>
+    <!-- Activate usb camera-->
+    <node name="usb_cam" pkg="usb_cam" type="usb_cam_node" output="screen">
+        <param name="video_device" value="/dev/video0" />
+        <param name="image_width" value="640" />
+        <param name="image_height" value="480" />
+        <param name="pixel_format" value="yuyv" />
+        <param name="camera_frame_id" value="usb_cam" />
+        <param name="io_method" value="mmap" />
+        <!-- Remap the topic from /usb_cam/image_raw to /camera/image_raw -->
+        <remap from="/usb_cam/image_raw" to="/camera/image_raw" />
+    </node>
     <!-- Activate the lane detector node using video   -->
     <node name="lane_follower_node" pkg="lane_follower" type="lane_detector_node.py" output="screen">
         <param name="visualization" value="true" />
