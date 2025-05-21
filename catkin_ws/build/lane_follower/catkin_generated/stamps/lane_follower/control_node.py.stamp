@@ -19,14 +19,14 @@ class ControlNode:
         self.rate = rospy.Rate(10)
 
         # Set the parameter for the motor
-        self.base_speed = rospy.get_param('~base_speed', 100)
-        self.max_pwm = rospy.get_param('~max_pwm', 255)
-        self.min_pwm = rospy.get_param('~min_pwm', 0)
+        self.base_speed = rospy.get_param('~base_speed', 80)
+        self.max_pwm = rospy.get_param('~max_pwm', 150)
+        self.min_pwm = rospy.get_param('~min_pwm', 50)
 
         # Set the parameter for the offset to PWM
-        self.k_p = rospy.get_param('k_p', 0.5)
+        self.k_p = rospy.get_param('k_p', 0.3)
         # If offset is too small. just go straight
-        self.deadzone = rospy.get_param('~deadzone', 10)
+        self.deadzone = rospy.get_param('~deadzone', 15)
 
         # Make loginfo to show the node is running
         rospy.loginfo(f"Two-wheeled control is initialized with base_speed = {self.base_speed}, kp = {self.k_p}")
@@ -52,24 +52,27 @@ class ControlNode:
             motor_pwm.right_pwm = self.base_speed
         else:
             # Determine the direction based on the sign of the offset
-            # If the offset is positive, turn left
-            # If the offset is negative, turn right
+            # If the offset is positive, turn right
+            # If the offset is negative, turn left
             if offset > 0:
-                motor_pwm.left_pwm = max(self.base_speed - self.k_p*offset, self.min_pwm)
-                motor_pwm.right_pwm = min(self.base_speed + self.k_p*offset, self.max_pwm)
-            else:
                 motor_pwm.left_pwm = min(self.base_speed + self.k_p*offset, self.max_pwm)
                 motor_pwm.right_pwm = max(self.base_speed - self.k_p*offset, self.min_pwm)
+            else:
+                motor_pwm.left_pwm = max(self.base_speed - self.k_p*offset, self.min_pwm)
+                motor_pwm.right_pwm = min(self.base_speed + self.k_p*offset, self.max_pwm)
             
             # Restrict the pwm to be between min_pwm and max_pwm
             # And convert to int, since motor_pwm is an int
-            motor_pwm.left_pwm = int(max(min(motor_pwm.left_pwm, self.max_pwm), self.min_pwm))
-            motor_pwm.right_pwm = int(max(min(motor_pwm.right_pwm, self.max_pwm), self.min_pwm))
+            motor_pwm.left_pwm = max(self.min_pwm, min(motor_pwm.left_pwm, self.max_pwm))
+            motor_pwm.right_pwm = max(self.min_pwm, min(motor_pwm.right_pwm, self.max_pwm))
 
-            # Publish the motor_pwm message
-            self.motor_pwm_pub.publish(motor_pwm)
+        motor_pwm.left_pwm = int(motor_pwm.left_pwm)
+        motor_pwm.right_pwm = int(motor_pwm.right_pwm)
 
-            rospy.loginfo(f"Motor PWM: left_pwm = {motor_pwm.left_pwm}, right_pwm = {motor_pwm.right_pwm}, offset = {offset}")
+        # Publish the motor_pwm message
+        self.motor_pwm_pub.publish(motor_pwm)
+
+        rospy.loginfo(f"Motor PWM: left_pwm = {motor_pwm.left_pwm}, right_pwm = {motor_pwm.right_pwm}, offset = {offset}")
 if __name__ == '__main__':
     try:
         ControlNode()

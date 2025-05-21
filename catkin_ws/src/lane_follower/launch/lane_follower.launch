@@ -10,7 +10,6 @@
         <!-- Remap the topic from /usb_cam/image_raw to /camera/image_raw -->
         <remap from="/usb_cam/image_raw" to="/camera/image_raw" />
     </node>
-    <node>
     <!-- Activate the lane detector node using video   -->
     <node name="lane_follower_node" pkg="lane_follower" type="lane_detector_node.py" output="screen">
         <param name="visualization" value="true" />
@@ -20,11 +19,11 @@
 
     <!--Activate the control node -->
     <node name="control_node" pkg="lane_follower" type="control_node.py" output="screen">
-        <param name="base_speed" value="100" />
-        <param name="max_pwm" value="255" />
-        <param name="min_pwm" value="0" />
-        <param name="k_p" value="0.5" />
-        <param name="deadzone" value="10" />
+        <param name="base_speed" value="80" />
+        <param name="max_pwm" value="150" />
+        <param name="min_pwm" value="50" />
+        <param name="k_p" value="0.2" />
+        <param name="deadzone" value="50" />
     </node>
 </launch>
 
