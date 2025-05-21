@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import sys
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, String
 from cv_bridge import CvBridge, CvBridgeError
 
 class LaneDetectorNode:
@@ -23,6 +23,8 @@ class LaneDetectorNode:
         # Create a publisher to publish offset
         self.offset_pub = rospy.Publisher('lane_offset', Float32, queue_size=10)
 
+        # Create a publisher to publish the arrows direction
+        self.arrow_pub = rospy.Publisher('arrow_direction', String, queue_size=10 )
         # Parameters for the process image
         self.height_ratio = 0.6
         self.width_offset = 0
@@ -31,6 +33,15 @@ class LaneDetectorNode:
         self.hough_threshold = 30#20
         self.hough_min_line_length = 20#5
         self.hough_max_line_gap = 30#60
+
+        # PArameters for arrow detection
+        self.arrow_roi_height_upper = 0.0
+        self.arrow_roi_height_lower = 0.5
+        self.arrow_roi_width_upper = 0.8
+        self.arrow_roi_width_lower = 0.2
+
+        # Control the distance for the car to detect triangle, 1 sec before the turning part
+        self.triangle_area_threshold = 2300
 
 
         # Video mode
@@ -96,6 +107,10 @@ class LaneDetectorNode:
         # Calculate the center of the lane
         lane_center = self.classify_center(frame, left_lines, right_lines)
 
+        # Show the arrow ROI
+        direction = self.detect_arrow(frame)
+
+        # Publish the offset
         height, width = frame.shape[:2]
         center = width/2
         if lane_center is not None and not np.isnan(lane_center):
@@ -103,6 +118,9 @@ class LaneDetectorNode:
             offset = lane_center-center
             self.offset_pub.publish(float(offset))
             rospy.logdebug("Offset: %f", offset)
+        # Publish the direction of the arrow
+        if(direction != 0):
+            self.arrow_pub.publish(direction)
         if self.visualization:
             # Visualize the lane
             result_frame = self.visualize_lines(frame, left_lines, right_lines, lane_center)
@@ -170,6 +188,99 @@ class LaneDetectorNode:
         )
 
         return lines
+    def detect_arrow(self, frame):
+        """ Detect the arrow direction in upper-part of the image
+        1. Convert to grayscale
+        2. Apply Gaussian blur to reduce noise
+        3. Apply adaptive binary threshold to isolate the arrow
+        4. Apply the ROI mask to the image to reduce the noise
+        5. Use cv2.findCountour to find the countour of the image
+        6. Use cv2.arcLength to calculate the length of the contours
+        7. Use cv2.approxPolyDP to approximate the polygon of the contours
+        8. Judge the direction of the arrow
+        9. Return the direction of the arrow
+        """
+        
+        # Get the height and width of the image
+        height, width = frame.shape[:2]
+        # Convert to grayscale
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Apply Gaussian blur to reduce the noise
+        blur = cv2.GaussianBlur(gray, (5,5), 0)
+        # Don't apply  adaptive binary threshold to isolate the arrow, because the difference in white paper and black arrow
+        # Have high contrast, the adaptive binary threshold is not necessary, instead use binary thresho;d 
+        # adaptive_binary = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        # binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        
+        # Use canny edge detection to detect the edges
+        binary = cv2.Canny(blur, 50, 150)
+        # Define the ROI region
+        roi_region_arrow = np.array([[(width*self.arrow_roi_width_lower,height*self.arrow_roi_height_upper), 
+                                      (width*self.arrow_roi_width_upper, height*self.arrow_roi_height_upper),
+                                        (width*self.arrow_roi_width_upper,height*self.arrow_roi_height_lower),
+                                        (width*self.arrow_roi_width_lower, height*self.arrow_roi_height_lower)]], dtype=np.int32)
+        roi_mask_arrow = np.zeros_like(binary)
+        # White the ROI region and put it into the mask, only the ROI region are white
+        cv2.fillPoly(roi_mask_arrow, roi_region_arrow, 255)
+        masked_binary = cv2.bitwise_and(binary, roi_mask_arrow)
+        cv2.imshow('masked_binary', masked_binary)
+
+        # Find the contours of the image
+        contours, _ = cv2.findContours(masked_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+
+        for contour in contours:
+            # Filter the triangle caused by lane
+            area = cv2.contourArea(contour)
+            if area < self.triangle_area_threshold:
+                continue
+            # Calculate and estimate the length of the contour
+            epsilon = 0.02*cv2.arcLength(contour, True)
+            # Approximate the ploygon of the contour
+            # approx are the points of the polygon
+            approx = cv2.approxPolyDP(contour, epsilon, True)
+            # When the approx is 3, we assume it is a triangle
+            if(len(approx) == 3):
+                cv2.drawContours(frame, [approx], 0, (255, 255, 0), 2)
+                
+                # Get the points of the triangle
+                # Use np.squeeze to compress the points to 2D array
+                vertices = np.squeeze(approx)
+                # Calculate the length of the lines
+                check1 = self.get_line_len(vertices[0][0], vertices[0][1], vertices[1][0], vertices[1][1])
+                check2 = self.get_line_len(vertices[1][0], vertices[1][1], vertices[2][0], vertices[2][1])
+                check3 = self.get_line_len(vertices[0][0], vertices[0][1], vertices[2][0], vertices[2][1])
+
+                # Find the point at the upper part of the triangle
+                vertices = sorted(vertices, key=lambda x:x[1])
+                top = vertices[0]
+                bottom_left, bottom_right = vertices[1], vertices[2]
+
+                # Make sure the buttom left point is the left point and the bottom right point is the right point
+                if(bottom_left[0] > bottom_right[0]):
+                    bottom_left, bottom_right = bottom_right, bottom_left
+                # Calculate the center of the triangle
+                center = (bottom_left[0] + bottom_right[0]) / 2
+
+                # Determine the direction of arrow
+                if center < top[0]:
+                    direction = "left"
+                else:
+                    direction = "right"
+                print("Direction: ", direction)
+                #Check the length of the lines
+                if(check1 > 15 and check2 > 15 and check3 > 15):
+
+                    # Publish the direction of the arrow
+                    return direction
+        return 0
+
+
+    def get_line_len(self, x1, y1, x2, y2):
+        """Helper function to calculate the length of the line for triangle detection"""
+        return np.sqrt((x2-x1)**2 + (y2-y1)**2)
+            
+
     def classify_lines(self,frame, lines):
         """ Classify line into right lanes and left lanes
         1. When only detect one lines, and all the x value is larger than 0.25*width, we classify it as right lane
@@ -285,11 +396,11 @@ class LaneDetectorNode:
         # Show the offset between the lane center and the video center
         offset = lane_center - center_x
         if offset > 0:
-            cv2.putText(line_image, f'offset left: {offset:.2f}', (width-20, height-20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            cv2.putText(line_image, f'offset left: {offset:.2f}', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         elif offset < 0:
-            cv2.putText(line_image, f'offset right: {offset:.2f}', (width-20, height-20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+            cv2.putText(line_image, f'offset right: {offset:.2f}', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
         else:
-            cv2.putText(line_image, 'offset: 0', (width-20, height-20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            cv2.putText(line_image, 'offset: 0', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
         # Show the line
         #cv2.imshow('line_image', line_image)
         return cv2.addWeighted(frame, 0.8, line_image, 1, 0)
