@@ -1,4 +1,5 @@
 #include <ros.h>
+#include <std_msgs/String.h>
 #include <std_msgs/Int16.h>
 #include <lane_follower/MotorPWM_msg.h>
 
@@ -39,6 +40,16 @@ float kp = 0.5; // Proportional gain
 float ki = 0.2; // Integral gain
 float kd = 0.05; // Derivative gain
 
+// Parameters for receiving the direction message
+bool executing_direction = false; // Is executing direction order or not
+unsigned long direction_start_time = 0; // Start time of the direction order
+unsigned long direction_phase_time = 500; // Time to execute phase, 0.5s
+int direction_phase = 0; // Phase we current at (straight=0 or turn=1)
+String current_direction = ""; // Current direction we are executing
+int straight_pwm = 80;
+int turn pwm = 60;
+
+
 float error_left_prev = 0, error_right_prev = 0;
 float integral_left = 0, integral_right = 0;
 
@@ -47,17 +58,38 @@ ros::NodeHandle nh;
 
 // Define callback functions
 void motorPwmCallback(const lane_follower::MotorPWM_msg& msg){
-    target_pwm_left = msg.left_pwm;
-    target_pwm_right = msg.right_pwm;
-    Serial.print("Received left PWM: ");
-    Serial.print(target_pwm_left);
-    Serial.print(", right PWM: ");
-    Serial.println(target_pwm_right);
+    // If not executing direction, handle pwm 
+    if(!executing_direction){
+        target_pwm_left = msg.left_pwm;
+        target_pwm_right = msg.right_pwm;
+        Serial.print("Received left PWM: ");
+        Serial.print(target_pwm_left);
+        Serial.print(", right PWM: ");
+        Serial.println(target_pwm_right);
+    }
+
+}
+
+void DirectionCallback(const std_msgs::String& msg){
+    String direction = msg.data;
+    // If receive left or right, turn on the executing mode
+    if(direction == "left" || direction == "right"){
+        executing_direction = true;
+        direction_start_time = millis();
+        current_direction = direction;
+        Serial.print("Executing direction: ");
+        Serial.println(current_direction);
+    }
+    // Set walk straight pwm
+    target_pwm_left = straight_pwm;
+    target_pwm_right = straight_pwm;
 }
 
 // Build subscriber
 // And <lane_follower::MotorPWM_msg> to specify which package the message is from
 ros::Subscriber<lane_follower::MotorPWM_msg> motorPWMSub("/motor_pwm", &motorPwmCallback);
+// Receive the direction message from topic /arrow_direction
+ros::Subscriber<std_msgs::String> arrowDirectionSub("/arrow_direction", &DirectionCallback);
 
 // Build publisher to publish the pwm values
 std_msgs::Int16 left_encoder_msg;
@@ -73,12 +105,16 @@ void setup(){
     // Initialize the ros node
     nh.initNode();
     nh.subscribe(motorPWMSub);
+    nh.subscribe(arrowDirectionSub);
     nh.advertise(left_encoder_pub);
     nh.advertise(right_encoder_pub);
 }
 
 void loop(){
     currentMillis = millis();
+    if(execution_direction){
+        HandleDirectionExecution();
+    }
 
     // In specific periof, do the PID control
     if(currentMillis-previousMillis >= interval){
@@ -107,6 +143,49 @@ void loop(){
     }
 
     nh.spinOnce();
+}
+
+// Handle direction execution (straight and then turn)
+void HandleDirectionExecution(){
+    unsigned long elapsed_time = currentMillis - direction_start_time;
+
+    // Phase 0: Go straight
+    if(direction_phase == 0){
+        // If the elapsed time is lesser than the phase time, continue straight
+        if(elapsed_time < direction_phase_time){
+            target_pwm_left = straight_pwm;
+            target_pwm_right = straight_pwm;
+        }
+        else{
+            // Switch to phase 1: turning
+            direction_phase = 1;
+            direction_start_time = currentMillis; // Reset the start time
+
+            // Set turn direction
+            if(current_direction == "left"){
+                target_pwm_left = turn_pwm;
+                target_pwm_right = straight_pwm;
+            }
+            else if(current_direction == "right"){
+                target_pwm_left = straight_pwm;
+                target_pwm_right = turn_pwm;
+            }
+        }
+    }
+    // phase 1: turn for 0.5sec
+    else if(direction_phase == 1){
+        // If the elapsed time is lesser than the phase time, continue turning
+        if(elapsed_time < direction_phase_time){
+            // Do nothing, just wait
+        }
+        else{
+            // Switch back to phase 0: go straight
+            direction_phase = 0;
+            target_pwm_left = straight_pwm;
+            target_pwm_right = straight_pwm;
+            executing_direction = false; // Reset the executing direction flag
+        }
+    }
 }
 
 // PID control function
