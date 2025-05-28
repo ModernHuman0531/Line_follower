@@ -26,19 +26,31 @@ class LaneDetectorNode:
         # Create a publisher to publish the arrows direction
         self.arrow_pub = rospy.Publisher('arrow_direction', String, queue_size=10 )
         # Parameters for the process image
-        self.height_ratio = 0.6
+        self.height_ratio = 0.65
         self.width_offset = 0
-        self.canny_low_threshold = 90
-        self.canny_high_threshold = 160
-        self.hough_threshold = 30#20
-        self.hough_min_line_length = 20#5
-        self.hough_max_line_gap = 30#60
+        self.canny_low_threshold = 120
+        self.canny_high_threshold = 200
+        self.hough_threshold = 50
+        self.hough_min_line_length = 60#5
+        self.hough_max_line_gap = 25#60
 
         # PArameters for arrow detection
         self.arrow_roi_height_upper = 0.0
         self.arrow_roi_height_lower = 0.5
-        self.arrow_roi_width_upper = 0.8
-        self.arrow_roi_width_lower = 0.2
+        self.arrow_roi_width_upper = 0.77
+        self.arrow_roi_width_lower = 0.22
+        self.arrow_canny_low_threshold = 100
+        self.arrow_canny_high_threshold = 150
+
+        # Create parameters to record the last frame's left and right lanes
+        self.last_left_x = None
+        self.last_right_x = None
+        self.lane_match_threshold = 40
+
+        # Recoed the last offset to avoid the lane change too fast
+        self.last_offset = None
+        self.alpha = 0.7
+        self.max_jump = 50
 
         # Control the distance for the car to detect triangle, 1 sec before the turning part
         self.triangle_area_threshold = 2300
@@ -116,6 +128,17 @@ class LaneDetectorNode:
         if lane_center is not None and not np.isnan(lane_center):
             # Calculate the offset
             offset = lane_center-center
+            if self.last_offset is not None:
+                # Apply a low-pass filter to smooth the offset, last_offset*alpha + offset*(1-alpha)
+                offset = self.alpha * self.last_offset + (1 - self.alpha) * offset
+                if abs(offset - self.last_offset) > self.max_jump:
+                    if offset > self.last_offset:
+                        offset = self.last_offset + self.max_jump
+                    elif offset < self.last_offset:
+                        offset = self.last_offset - self.max_jump
+            
+            self.last_offset = offset
+            # Publish the offset
             self.offset_pub.publish(float(offset))
             rospy.logdebug("Offset: %f", offset)
         # Publish the direction of the arrow
@@ -213,7 +236,7 @@ class LaneDetectorNode:
         # binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
         
         # Use canny edge detection to detect the edges
-        binary = cv2.Canny(blur, 50, 150)
+        binary = cv2.Canny(blur, self.arrow_canny_low_threshold, self.arrow_canny_high_threshold)
         # Define the ROI region
         roi_region_arrow = np.array([[(width*self.arrow_roi_width_lower,height*self.arrow_roi_height_upper), 
                                       (width*self.arrow_roi_width_upper, height*self.arrow_roi_height_upper),
@@ -283,92 +306,93 @@ class LaneDetectorNode:
 
     def classify_lines(self,frame, lines):
         """ Classify line into right lanes and left lanes
-        1. When only detect one lines, and all the x value is larger than 0.25*width, we classify it as right lane
-        2. When only detect one lines, and all the x value is smaller than 0.75*width, we classify it as left lane
-        3. When detect two lines, we classify the left and right lanes depends on if x value exceed 0.5*width
+        1. When detect two lines, we classify the left and right lanes depends on if x value exceed 0.5*width
+        2. Since the lane can't change from left lane to right lane immediately, we can record the last frame's left lane and right lane
+        if the difference is small, we can assume it is the same lane
         """
         if lines is None:
             return None, None
         height, width = frame.shape[:2]
         left_lines, right_lines = [], []
-            
-        # Only detect one lane
-        if len(lines) <= 2:
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-                avg_x = (x1 + x2) / 2
-                slope = (y2 - y1) / (x2 - x1) if (x2 - x1) != 0 else 0
-                if slope > 0.15:
-                    if avg_x < 0.6*width and x1 < x2:                    
-                        left_lines.append(line)
-                elif slope < -0.15:       
-                    if avg_x > 0.4*width and x1 > x2:
-                        right_lines.append(line)
-                else:
-                    left_lines.append(line)
-        else:
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-                slope = (y2 - y1) / (x2 - x1) if (x2 - x1) != 0 else 0
-                avg_x = (x1 + x2) / 2
+        left_avg_x, right_avg_x = [],[]
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            slope = (y2 - y1) / (x2 - x1) if (x2 - x1) != 0 else 0
+            avg_x = (x1 + x2) / 2
+
+            if abs(slope) < 0.15:
+                #left_lines.append(line)
+                continue
+
+            # Compare to the last frame's left and right lanes
+            if self.last_left_x is not None and abs(self.last_left_x - avg_x) < self.lane_match_threshold:
+                left_lines.append(line)
+                left_avg_x.append(avg_x)
+            elif self.last_right_x is not None and abs(self.last_right_x - avg_x) < self.lane_match_threshold:
+                right_lines.append(line)
+                right_avg_x.append(avg_x)
+            else:
                 if slope < -0.15 and avg_x < 0.5*width:
                     left_lines.append(line)
-                elif slope > 0.15:
+                elif slope > 0.15 and avg_x > 0.5*width:
                     right_lines.append(line)
-                else:
-                    left_lines.append(line)
-    
+            # Update the last frame's left and right lanes
+            if left_avg_x:
+                self.last_left_x = np.mean(left_avg_x)
+            if right_avg_x:
+                self.last_right_x = np.mean(right_avg_x)
         return left_lines, right_lines
 
     def classify_center(self, frame, left_lines, right_lines):
-        """Calculate the center of lane
-        1. If only have one lane, we assume the width of lane and get the center
-        2. If have two lanes, just average the x value of the two lanes
+        """Calculate the center of the lane
+        1. Use np.polyfit to create a linear function for the lanes
+        2. Use linear function to calculate the x of the middle_y in ROI
+        3. Use lane_line to calculate the center of the lane
+            a. If we have both left and right lines, take the middle_y points of the left and right lines's x value and average them
+            b. If only have left lane, we take that lane's middle_y points and calculate x value's and add it with the width of the frame in ratio 0.58 to 0.42  
+            c. If only have right lane, we take that lane's middle_y points and calculate x value's *0.55
         """
         height, width = frame.shape[:2]
-        
-        # 初始化一个默认值，以防所有情况都失败
-        default_center = width * 0.7
-        
-        # 检查是否有空列表或None
-        if left_lines is None or len(left_lines) == 0:
-            if right_lines is not None and len(right_lines) > 0:
-                # 只有右侧车道线
-                lane_width = 0.7 * width
-                # 使用列表推导式前先检查列表不为空
-                right_x_values = [line[0][0] for line in right_lines if len(line) > 0 and len(line[0]) >= 1]
-                if right_x_values:  # 确保列表不为空
-                    right_x_mean = np.mean(right_x_values)
-                    return right_x_mean - lane_width / 2
-            return default_center  # 如果没有有效数据，返回默认值
+        lane_center = None
+        left_x_points, left_y_points = [], []
+        right_x_points, right_y_points = [], []
+        right_fit, left_fit = None, None
+        if left_lines:
+            for line in left_lines:
+                x1, y1, x2, y2 = line[0]
+                left_x_points.extend([x1, x2])
+                left_y_points.extend([y1, y2])
+            if len(left_x_points) >= 2:
+                left_fit = np.polyfit(left_y_points, left_x_points, 1)
+            else:
+                left_fit = None
+        if right_lines:
+            for line in right_lines:
+                x1, y1, x2, y2 = line[0]
+                right_x_points.extend([x1, x2])
+                right_y_points.extend([y1, y2])
+            if len(right_x_points) >= 2:
+                right_fit = np.polyfit(right_y_points, right_x_points, 1)
+            else:
+                right_fit = None
+        if left_fit is not None and right_fit is not None:
+            # Calculate the center of the lane by averaging the left middle and right middle
+            middle_y = (height + height*self.height_ratio) / 2
+            left_middle_x = left_fit[0]*middle_y + left_fit[1]
+            right_middle_x = right_fit[0]*middle_y + right_fit[1]
+            lane_center = (left_middle_x + right_middle_x) / 2
+        elif left_fit is not None:
+            # If only have left lane, we take that lane's middle_y points and calculate x value's and add it with the width of the frame in ratio 0.58 to 0.42 
+            middle_y = (height + height*self.height_ratio) / 2
+            left_middle_x = left_fit[0]*middle_y + left_fit[1]
+            lane_center = left_middle_x + (width * 0.65)/2
+        elif right_fit is not None:
+            # If only have right lane, we take that lane's middle_y points and calculate x value's *0.55
+            middle_y = (height + height*self.height_ratio) / 2
+            right_middle_x = right_fit[0]*middle_y + right_fit[1]
+            lane_center = right_middle_x - (width * 0.65)/2
+        return lane_center if lane_center is not None else 0.5*width  # Default to 70% of the width if no lanes detected
             
-        elif right_lines is None or len(right_lines) == 0:
-            if left_lines is not None and len(left_lines) > 0:
-                # 只有左侧车道线
-                lane_width = 0.7 * width
-                # 使用列表推导式前先检查列表不为空
-                left_x_values = [line[0][0] for line in left_lines if len(line) > 0 and len(line[0]) >= 1]
-                if left_x_values:  # 确保列表不为空
-                    left_x_mean = np.mean(left_x_values)
-                    return left_x_mean + lane_width / 2
-            return default_center  # 如果没有有效数据，返回默认值
-            
-        else:
-            # 两侧都有车道线
-            try:
-                # 添加错误处理，确保line[0][0]存在
-                left_x_values = [line[0][0] for line in left_lines if len(line) > 0 and len(line[0]) >= 1]
-                right_x_values = [line[0][0] for line in right_lines if len(line) > 0 and len(line[0]) >= 1]
-                
-                if left_x_values and right_x_values:  # 确保两个列表都不为空
-                    left_x = np.mean(left_x_values)
-                    right_x = np.mean(right_x_values)
-                    return (left_x + right_x) / 2
-                else:
-                    return default_center
-            except (IndexError, ValueError) as e:
-                print(f"error when calculating: {e}")
-                return default_center  # 发生错误时返回默认值
 
     def visualize_lines(self, frame, left_lines, right_lines, lane_center):
         """ Just draw the line that hough transform detected """
