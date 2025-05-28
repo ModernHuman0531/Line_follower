@@ -14,7 +14,7 @@ class ControlNode:
         # Create a subsciber to the /lane_offset topic
         rospy.Subscriber('/lane_offset', Float32, self.offset_callback)
         # Create a publisher to the /motor_pwm topic
-        self.motor_pwm_pub = rospy.Publisher('/motor_pwm', MotorPWM_msg, queue_size=10)
+        self.motor_pwm_pub = rospy.Publisher('/motor_pwm', MotorPWM_msg, queue_size=1)
         # Set the rate of the node to 10Hz
         self.rate = rospy.Rate(10)
 
@@ -24,7 +24,7 @@ class ControlNode:
         self.min_pwm = rospy.get_param('~min_pwm', 50)
 
         # Set the parameter for the offset to PWM
-        self.k_p = rospy.get_param('k_p', 0.3)
+        self.k_p = rospy.get_param('~k_p', 0.2)
         # If offset is too small. just go straight
         self.deadzone = rospy.get_param('~deadzone', 15)
 

@@ -21,8 +21,8 @@
     <node name="control_node" pkg="lane_follower" type="control_node.py" output="screen">
         <param name="base_speed" value="80" />
         <param name="max_pwm" value="150" />
-        <param name="min_pwm" value="50" />
-        <param name="k_p" value="0.2" />
+        <param name="min_pwm" value="40" />
+        <param name="k_p" value="0.12" />
         <param name="deadzone" value="50" />
     </node>
 </launch>
