@@ -71,17 +71,24 @@ RUN apt-get update && apt-get install -y \
   qt5-qmake qtbase5-dev-tools qtbase5-dev \
   && rm -rf /var/lib/apt/lists/*
 
-# Install arduino-cli
-# Don't need this line if in raspberry pi 4, since already install arduino IDE
+
+# Install package for mapping, localization and navigation
+RUN apt-get update && apt-get install -y \
+  ros-noetic-hector-slam \
+  ros-noetic-rplidar-ros \
+  ros-noetic-map-server \
+  ros-noetic-amcl \
+  ros-noetic-navigation \
+  ros-noetic-move-base \
+  ros-noetic-teleop-twist-keyboard \
+  ros-noetic-rviz \
+  && rm -rf /var/lib/apt/lists/*
+
+
 
 RUN curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
 ENV PATH="/root/bin:${PATH}"
 
-# Initialize arduino-cli and update the index and install the core
-# Don't need this line if in raspberry pi 4, since already install arduino IDE
-RUN arduino-cli config init && \
-  arduino-cli core update-index && \
-  arduino-cli core install arduino:avr
 
 
 # 複製本機的 Zsh 設定檔

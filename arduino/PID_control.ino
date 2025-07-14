@@ -112,7 +112,7 @@ void setup(){
 
 void loop(){
     currentMillis = millis();
-    if(execution_direction){
+    if(executing_direction){
         HandleDirectionExecution();
     }
 

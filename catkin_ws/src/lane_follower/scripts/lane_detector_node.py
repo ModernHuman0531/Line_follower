@@ -28,11 +28,10 @@ class LaneDetectorNode:
         # Parameters for the process image
         self.height_ratio = 0.65
         self.width_offset = 0
-        self.canny_low_threshold = 120
+        self.canny_low_threshold = 130
         self.canny_high_threshold = 200
-        self.hough_threshold = 50
-        self.hough_min_line_length = 60#5
-        self.hough_max_line_gap = 25#60
+        self.binary_lower_bound = 140
+        self.binary_upper_bound = 255
 
         # PArameters for arrow detection
         self.arrow_roi_height_upper = 0.0
@@ -45,7 +44,7 @@ class LaneDetectorNode:
         # Create parameters to record the last frame's left and right lanes
         self.last_left_x = None
         self.last_right_x = None
-        self.lane_match_threshold = 40
+        self.lane_match_threshold = 120
 
         # Recoed the last offset to avoid the lane change too fast
         self.last_offset = None
@@ -112,15 +111,12 @@ class LaneDetectorNode:
         3. Publish the offset
         4. Visualize the lane
         """
-        # Process the image
-        lines = self.process_image(frame)
-        # Classify the lines into left and right lines
-        left_lines, right_lines = self.classify_lines(frame, lines)
-        # Calculate the center of the lane
-        lane_center = self.classify_center(frame, left_lines, right_lines)
-
         # Show the arrow ROI
         direction = self.detect_arrow(frame)
+
+        left_lane, right_lane, lane_center = self.process_image(frame)
+
+
 
         # Publish the offset
         height, width = frame.shape[:2]
@@ -145,72 +141,54 @@ class LaneDetectorNode:
         if(direction != 0):
             self.arrow_pub.publish(direction)
         if self.visualization:
-            # Visualize the lane
-            result_frame = self.visualize_lines(frame, left_lines, right_lines, lane_center)
-            cv2.imshow('result', result_frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 rospy.signal_shutdown("User requested shutdown")
 
     def process_image(self, frame):
-        """ Preprocess the image for lane detection 
-        1. Convert to grayscale 
-        2. Define the ROI region first and then apply the mask
-        3. Apply the Gaussian blur to reduce noise
-        4. Apply the binary threshold to isolate the lane lines
-        5. Apply the ROI mask to the image to reduce the noise and help canny edge detection
-        6.Applu erosion and dilation to remove noise
-        7. Apply the Canny edge detection to detect the edges
-        8. Apply the Hough transform to detect the lines
-        9. Return the lines
         """
-        # Define the ROI region first and then apply the mask
-
+        Use findContours to detect the lane lines instead of Hough Transform
+        1. Convert the image to grayscale
+        2. Apply Gaussian blur to reduce noise
+        3. Apply binary threshold to isolate the lane lines
+        4. Define the ROI region to reduce the noise
+        5. Use canny edge detection to detect the edges
+        6. Use cv2.findContours to find the contours of the image
+        """
+        # Get the height and width of the image
         height, width = frame.shape[:2]
-        # Convert to grayscale(0-255)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) 
-        # Apply Gaussian blur to reduce noise and improve edge detection
-        blur = cv2.GaussianBlur(gray, (5,5), 0)    
-        # Apply adaptive_binary threshold to isolate the lane lines, very helpful
-        adaptive_binary = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2) 
-        #cv2.imshow('binary', adaptive_binary)  
+
+        # Convert to grayscale
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # Apply Gaussian blur to reduce the noise
+        blur = cv2.GaussianBlur(gray, (9, 9), 0)
+
+        # Apply threshold to isolate the lane lines
+        _, binary = cv2.threshold(blur, self.binary_lower_bound, self.binary_upper_bound, cv2.THRESH_BINARY_INV)
+
+        binary = cv2.medianBlur(binary, 5)
+
         # Define the ROI region
-        roi_region = np.array([[(0, height), (0+self.width_offset,  height*self.height_ratio), (width-self.width_offset, height*self.height_ratio), (width, height)]], dtype=np.int32)
-        roi_mask = np.zeros_like(adaptive_binary)
-        # White the ROI region and put it into the mask, only ROI region is white
+        roi_region = np.array(
+            [[(0, height*self.height_ratio),
+              (0, height),
+              (width, height),
+              (width, height*self.height_ratio)
+              ]], dtype=np.int32
+        )
+        roi_mask = np.zeros_like(binary)
         cv2.fillPoly(roi_mask, roi_region, 255)
+        roi_binary = cv2.bitwise_and(binary, roi_mask)
 
-        #Apply morphological operations, to create kernals for dilation and erosion
-        kernal = np.ones((3,3), np.uint8)
-        # Erosion to remove noise
-        eroded = cv2.erode(adaptive_binary, kernal, iterations=1)
-        # Dilation to fill gaps in the lane lines
-        dilated = cv2.dilate(eroded, kernal, iterations=2)
-        #cv2.imshow('dilated', dilated)
 
-        # Use and to access the origin image's ROI region and the other region is black
-        dilated_roi = cv2.bitwise_and(dilated, roi_mask)
-        # Show the ROI region
-        cv2.imshow('dilated_roi', dilated_roi)
-
-        #Apply Canny edge detection after applying mask to let canny focus on the lane lines
-        edges = cv2.Canny(dilated_roi, self.canny_low_threshold, self.canny_high_threshold)
+        # Canny edge detection to detect the edges
+        edges = cv2.Canny(roi_binary, self.canny_low_threshold, self.canny_high_threshold)
         cv2.imshow('edges', edges)
 
-        # Apply ROI mask again on the edges to avoid noise
-        masked_edges = cv2.bitwise_and(edges, roi_mask)
-        #cv2.imshow('masked_edges', masked_edges)
+        # Find the contours of the image
+        contours, _ = cv2.findContours(roi_binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        return self.classify_lanes(frame, contours) 
 
-        # Use hough transform to detect lines
-        lines = cv2.HoughLinesP(
-            masked_edges,
-            rho=1,
-            theta=np.pi/180,
-            threshold=self.hough_threshold,
-            minLineLength=self.hough_min_line_length,
-            maxLineGap=self.hough_max_line_gap
-        )
-
-        return lines
     def detect_arrow(self, frame):
         """ Detect the arrow direction in upper-part of the image
         1. Convert to grayscale
@@ -304,130 +282,128 @@ class LaneDetectorNode:
         return np.sqrt((x2-x1)**2 + (y2-y1)**2)
             
 
-    def classify_lines(self,frame, lines):
-        """ Classify line into right lanes and left lanes
-        1. When detect two lines, we classify the left and right lanes depends on if x value exceed 0.5*width
-        2. Since the lane can't change from left lane to right lane immediately, we can record the last frame's left lane and right lane
-        if the difference is small, we can assume it is the same lane
+    def classify_lanes(self,frame, contours):
+        """ 
         """
-        if lines is None:
-            return None, None
         height, width = frame.shape[:2]
-        left_lines, right_lines = [], []
-        left_avg_x, right_avg_x = [],[]
-        for line in lines:
-            x1, y1, x2, y2 = line[0]
-            slope = (y2 - y1) / (x2 - x1) if (x2 - x1) != 0 else 0
-            avg_x = (x1 + x2) / 2
+        video_center = width / 2
+        
+        left_lane = None
+        right_lane = None
 
-            if abs(slope) < 0.15:
-                #left_lines.append(line)
+        
+        # Filter the small contours and weird contours
+        valid_contours = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < 200:
                 continue
 
-            # Compare to the last frame's left and right lanes
-            if self.last_left_x is not None and abs(self.last_left_x - avg_x) < self.lane_match_threshold:
-                left_lines.append(line)
-                left_avg_x.append(avg_x)
-            elif self.last_right_x is not None and abs(self.last_right_x - avg_x) < self.lane_match_threshold:
-                right_lines.append(line)
-                right_avg_x.append(avg_x)
-            else:
-                if slope < -0.15 and avg_x < 0.5*width:
-                    left_lines.append(line)
-                elif slope > 0.15 and avg_x > 0.5*width:
-                    right_lines.append(line)
-            # Update the last frame's left and right lanes
-            if left_avg_x:
-                self.last_left_x = np.mean(left_avg_x)
-            if right_avg_x:
-                self.last_right_x = np.mean(right_avg_x)
-        return left_lines, right_lines
-
-    def classify_center(self, frame, left_lines, right_lines):
-        """Calculate the center of the lane
-        1. Use np.polyfit to create a linear function for the lanes
-        2. Use linear function to calculate the x of the middle_y in ROI
-        3. Use lane_line to calculate the center of the lane
-            a. If we have both left and right lines, take the middle_y points of the left and right lines's x value and average them
-            b. If only have left lane, we take that lane's middle_y points and calculate x value's and add it with the width of the frame in ratio 0.58 to 0.42  
-            c. If only have right lane, we take that lane's middle_y points and calculate x value's *0.55
-        """
-        height, width = frame.shape[:2]
-        lane_center = None
-        left_x_points, left_y_points = [], []
-        right_x_points, right_y_points = [], []
-        right_fit, left_fit = None, None
-        if left_lines:
-            for line in left_lines:
-                x1, y1, x2, y2 = line[0]
-                left_x_points.extend([x1, x2])
-                left_y_points.extend([y1, y2])
-            if len(left_x_points) >= 2:
-                left_fit = np.polyfit(left_y_points, left_x_points, 1)
-            else:
-                left_fit = None
-        if right_lines:
-            for line in right_lines:
-                x1, y1, x2, y2 = line[0]
-                right_x_points.extend([x1, x2])
-                right_y_points.extend([y1, y2])
-            if len(right_x_points) >= 2:
-                right_fit = np.polyfit(right_y_points, right_x_points, 1)
-            else:
-                right_fit = None
-        if left_fit is not None and right_fit is not None:
-            # Calculate the center of the lane by averaging the left middle and right middle
-            middle_y = (height + height*self.height_ratio) / 2
-            left_middle_x = left_fit[0]*middle_y + left_fit[1]
-            right_middle_x = right_fit[0]*middle_y + right_fit[1]
-            lane_center = (left_middle_x + right_middle_x) / 2
-        elif left_fit is not None:
-            # If only have left lane, we take that lane's middle_y points and calculate x value's and add it with the width of the frame in ratio 0.58 to 0.42 
-            middle_y = (height + height*self.height_ratio) / 2
-            left_middle_x = left_fit[0]*middle_y + left_fit[1]
-            lane_center = left_middle_x + (width * 0.65)/2
-        elif right_fit is not None:
-            # If only have right lane, we take that lane's middle_y points and calculate x value's *0.55
-            middle_y = (height + height*self.height_ratio) / 2
-            right_middle_x = right_fit[0]*middle_y + right_fit[1]
-            lane_center = right_middle_x - (width * 0.65)/2
-        return lane_center if lane_center is not None else 0.5*width  # Default to 70% of the width if no lanes detected
+            # Calculate the bounding rectangle of the contour
+            x, y, w, h = cv2.boundingRect(contour)
             
+            if h < 0.2*height:
+                continue
+            valid_contours.append(contour)
 
-    def visualize_lines(self, frame, left_lines, right_lines, lane_center):
-        """ Just draw the line that hough transform detected """
-        height, width = frame.shape[:2]
-        line_image = np.zeros_like(frame)
-        # Draw the left and right lanes
-        if left_lines is not None:
-            for line in left_lines:
-                x1, y1, x2, y2 = line[0]
-                cv2.line(line_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(line_image, 'left lane', (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        if right_lines is not None:
-            for line in right_lines:
-                x1, y1, x2, y2 = line[0]
-                cv2.line(line_image, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                cv2.putText(line_image, 'right lane', (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-        # Draw the center of the lane in red
-        if lane_center is not None and not np.isnan(lane_center):
-            cv2.line(line_image, (int(lane_center), height), (int(lane_center), height-50), (0, 0, 255), 2)
-            cv2.putText(line_image, 'lane center', (int(lane_center), height), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-        # Draw the center of the video in yellow
-        center_x = int(width/2)
-        cv2.line(line_image, (center_x, height), (center_x, height-50), (255, 255, 0), 2)
-        cv2.putText(line_image, 'video center', (center_x, height), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
-        # Show the offset between the lane center and the video center
-        offset = lane_center - center_x
-        if offset > 0:
-            cv2.putText(line_image, f'offset left: {offset:.2f}', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-        elif offset < 0:
-            cv2.putText(line_image, f'offset right: {offset:.2f}', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+    
+        # Display the contours
+        image = frame.copy()
+        cv2.drawContours(image, valid_contours, -1, (0, 255, 0), 2)
+        cv2.imshow('all contours', image)
+
+
+
+        if valid_contours:
+            contour_x_positions = []
+            for contour in valid_contours:
+                M = cv2.moments(contour)
+                if M["m00"] != 0:
+                    cx = int(M["m10"] / M["m00"])
+                    contour_x_positions.append((contour, cx))
+
+            contour_x_positions.sort(key=lambda x: x[1])
+
+            left_candidates = []
+            right_candidates = []
+
+            for contour, cx in contour_x_positions:
+                if cx < video_center:
+                    left_candidates.append((contour, cx))
+                else:
+                    right_candidates.append((contour, cx))
+
+            # 選擇最接近上一幀的 x 的作為 left/right
+            left_lane = None
+            right_lane = None
+
+            if left_candidates:
+                if self.last_left_x is not None:
+                    left_lane, left_x = min(left_candidates, key=lambda x: abs(x[1] - self.last_left_x))
+                else:
+                    left_lane, left_x = max(left_candidates, key=lambda x: x[1])  # 靠近中心的左邊
+                self.last_left_x = left_x
+
+            if right_candidates:
+                if self.last_right_x is not None:
+                    right_lane, right_x = min(right_candidates, key=lambda x: abs(x[1] - self.last_right_x))
+                else:
+                    right_lane, right_x = min(right_candidates, key=lambda x: x[1])  # 靠近中心的右邊
+                self.last_right_x = right_x
+
+
+
+
+        # Create results image
+        result_image = frame
+
+        # Have left lane and right lane
+        if left_lane is not None and right_lane is not None:
+            left_points = left_lane.reshape(-1, 2)
+            right_points = right_lane.reshape(-1, 2)
+
+            # 找左車道底部最右側點
+            left_rightmost = left_points[left_points[:, 0].argmax()]
+            # 找右車道底部最左側點
+            right_leftmost = right_points[right_points[:, 0].argmin()]
+
+            center_bottom_x = (left_rightmost[0] + right_leftmost[0]) // 2
+
+            # 畫中心線
+            cv2.line(result_image, (center_bottom_x, height), (center_bottom_x, height-100), (0, 0, 255), 2)
+
+            lane_center = center_bottom_x
+        # Only have left lane    
+        elif left_lane is not None:
+            left_points = left_lane.reshape(-1, 2)
+            # Calculate the estimated right lane position
+            estimated_right_x = left_points[:, 0].max() + (width * 0.65)
+            lane_center = left_points[:, 0].max() + (width * 0.65) / 2
+
+        # Only have right lane
+        elif right_lane is not None:
+            right_points = right_lane.reshape(-1, 2)
+            # Calculate the estimated left lane position
+            estimated_left_x = right_points[:, 0].min() - (width * 0.65)
+            lane_center = right_points[:, 0].min() - (width * 0.65) / 2
+        
+        # If no lane is detected, return None
         else:
-            cv2.putText(line_image, 'offset: 0', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-        # Show the line
-        #cv2.imshow('line_image', line_image)
-        return cv2.addWeighted(frame, 0.8, line_image, 1, 0)
+            lane_center = None
+
+        # Draw the left and right lanes
+        if left_lane is not None:
+            cv2.drawContours(result_image, [left_lane], -1, (0, 255, 0), 2)
+        
+        if right_lane is not None:
+            cv2.drawContours(result_image, [right_lane], -1, (255, 0, 0), 2)
+        
+        if (right_lane is not None and left_lane is None) or (right_lane is None and left_lane is not None):
+            cv2.line(result_image, (int(lane_center), height), (int(lane_center), height-100), (0, 0, 255), 2)
+
+        cv2.imshow('result', result_image)
+        return left_lane, right_lane, lane_center    
+
 if __name__ == '__main__':
     # Initialize the ROS node
     try:

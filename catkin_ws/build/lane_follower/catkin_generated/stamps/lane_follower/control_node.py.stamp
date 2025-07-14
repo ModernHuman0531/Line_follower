@@ -24,7 +24,7 @@ class ControlNode:
         self.min_pwm = rospy.get_param('~min_pwm', 50)
 
         # Set the parameter for the offset to PWM
-        self.k_p = rospy.get_param('k_p', 0.2)
+        self.k_p = rospy.get_param('~k_p', 0.2)
         # If offset is too small. just go straight
         self.deadzone = rospy.get_param('~deadzone', 15)
 
